@@ -280,6 +280,7 @@ namespace FileReader
             {
                 Console.WriteLine(report + "\n");
             }
+            Console.ReadKey();
         }
         public void Exit()
         {
