@@ -18,7 +18,7 @@ namespace FileReader
             this.options = options;
             chosenOption = 0;
         }
-        public async Task DisplayOptions()
+        public void DisplayOptions()
         {
             Console.ForegroundColor = ConsoleColor.DarkCyan;
             Console.WriteLine(prompt);
@@ -45,7 +45,7 @@ namespace FileReader
             do
             {
                 Console.Clear();
-                await DisplayOptions();
+                DisplayOptions();
 
                 ConsoleKeyInfo key = Console.ReadKey(true);
                 keyPressed = key.Key;

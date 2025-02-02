@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Folder Include="FIles\ForbiddenFIles\" />
     <Folder Include="FIles\CorrectedFiles\" />
+    <Folder Include="FIles\ForbiddenFIles\" />
     <Folder Include="FIles\Reports\" />
   </ItemGroup>
 

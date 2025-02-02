@@ -1,23 +1,43 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Formats.Asn1;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace FileReader
 {
     internal class Manager
     {
+        private string initialDirectory = @"D:\FilesForProject";
         private HashSet<string> forbiddenWords = new();
-        private static SemaphoreSlim semaphore = new(1);
+        private static SemaphoreSlim semaphore = new(1, 1);
         private List<string> files = new List<string>();
         private List<string> reports = new List<string>();
         private static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
         CancellationToken token = cancellationTokenSource.Token;
+
+        public Manager()
+        {
+            try
+            {
+                var files = Directory.GetFiles(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\Reports", "*.txt");
+                foreach (string file in files)
+                {
+                    using (StreamReader reader = new StreamReader(file))
+                    {
+                        Task<string> report = reader.ReadToEndAsync();
+                        reports.Add(report.Result);
+                    }
+                }
+            }
+            catch { }
+        }
         public async void RunMainMenu()
         {
             string prompt = "\r\n  ______ _ _        ______            _                     \r\n |  ____(_) |      |  ____|          | |                    \r\n | |__   _| | ___  | |__  __  ___ __ | | ___  _ __ ___ _ __ \r\n |  __| | | |/ _ \\ |  __| \\ \\/ / '_ \\| |/ _ \\| '__/ _ \\ '__|\r\n | |    | | |  __/ | |____ >  <| |_) | | (_) | | |  __/ |   \r\n |_|    |_|_|\\___| |______/_/\\_\\ .__/|_|\\___/|_|  \\___|_|   \r\n                               | |                          \r\n                               |_|                          \r\n";
-            string[] options = { "Scan all files", "Edit forbidden word list", "View reports", "Exit" };
+            string[] options = { "Scan all files", "Edit forbidden word list", "Set searching directory", "View reports", "Exit" };
             Menu menu = new(prompt, options);
 
             while (true)
@@ -27,22 +47,27 @@ namespace FileReader
                 switch (selectedIndex)
                 {
                     case 0:
-                        ProcessFilesAsync();
+                        Task processFiles = ProcessFilesAsync();
                         break;
                     case 1:
                         EditForbiddenWordList();
                         break;
                     case 2:
-                        ViewReports();
+                        SetSearchingDirectory();
                         break;
                     case 3:
+                        ViewReports();
+                        break;
+                    case 4:
                         Exit();
                         break;
                 }
             }
         }
-        public async void ProcessFilesAsync()
+        
+        public async Task ProcessFilesAsync()
         {
+            //await Task.Delay(20000);
             await semaphore.WaitAsync();
             token.ThrowIfCancellationRequested();
 
@@ -55,7 +80,7 @@ namespace FileReader
             }
 
             files.Clear();
-            GetLocalFiles(@"D:\FilesForProject");
+            await GetLocalFiles();
             //GetAllFiles();
 
             try
@@ -99,15 +124,21 @@ namespace FileReader
                         File.Copy(file, Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + $@"\FIles\ForbiddenFIles\{Path.GetFileNameWithoutExtension(file) + "0"}.txt", true);
                         using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\CorrectedFiles\{Path.GetFileNameWithoutExtension(file) + "_Corrected"}.txt"))
                         {
-                            writer.Write(correctedText);
+                            await writer.WriteAsync(new ReadOnlyMemory<char>(correctedText.ToCharArray()), token);
                         }
                         report += $"{fileIndex}. {file} | Size: {new System.IO.FileInfo(file).Length} | Replacements: {replacements}\n";
                         fileIndex++;
                     }
                 }
-                using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\Reports\{DateTime.Now.Date.Day}-{DateTime.Now.Date.Month}-{DateTime.Now.Date.Year}.txt"))
+                int places = Math.Min(3, wordCount.Count);
+                foreach(var pair in wordCount)
                 {
-                    writer.Write(report);
+                    report += $"  - {pair.Key} - {pair.Value}\n";
+                    if (--places == 0) break;
+                }
+                using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\Reports\{DateTime.Now.Date.Day}-{DateTime.Now.Date.Month}-{DateTime.Now.Date.Year} I {DateTime.Now.Date.Hour}-{DateTime.Now.Date.Minute}-{DateTime.Now.Date.Second}.txt"))
+                {
+                    await writer.WriteAsync(new ReadOnlyMemory<char>(report.ToCharArray()), token);
                 }
                 reports.Add(report);
             }
@@ -122,13 +153,15 @@ namespace FileReader
                 semaphore.Release();
             }
         }
-        public void GetLocalFiles(string directory)
+        public async Task GetLocalFiles()
         {
-            files.AddRange(Directory.GetFiles(@"D:\FilesForProject", "*.txt"));
+            files.AddRange(Directory.GetFiles(initialDirectory, "*.txt"));
+            await Task.Delay(2000);
 
-            string[] directories = Directory.GetDirectories(directory, "*", new EnumerationOptions() { RecurseSubdirectories = true, IgnoreInaccessible = true });
+            string[] directories = Directory.GetDirectories(initialDirectory, "*", new EnumerationOptions() { RecurseSubdirectories = true, IgnoreInaccessible = true });
             foreach (string d in directories)
             {
+                token.ThrowIfCancellationRequested();
                 try
                 {
                     files.AddRange((Directory.GetFiles(d, "*.txt")));
@@ -141,44 +174,56 @@ namespace FileReader
                 }
             }
         }
-        public void GetAllFiles()
-        {
-            DriveInfo[] drives = DriveInfo.GetDrives();
-            foreach (var drive in drives)
-            {
-                try
-                {
-                    if (drive.IsReady && drive.DriveType == DriveType.Fixed)
-                    {
-                        Console.WriteLine($"Reading files from drive: {drive.Name}");
-                        string[] directories = Directory.GetDirectories(drive.Name, "*", new EnumerationOptions() { RecurseSubdirectories = true, IgnoreInaccessible = true });
+        //public async Task  GetAllFiles()
+        //{
+        //    DriveInfo[] drives = DriveInfo.GetDrives();
+        //    await Task.Delay(1);
 
-                        foreach (string directory in directories)
-                        {
-                            try
-                            {
-                                files.AddRange(files.Concat<string>(Directory.GetFiles(directory, "*.txt")));
-                            }
-                            catch (Exception e)
-                            {
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Console.WriteLine(e.Message);
-                                Console.ResetColor();
-                            }
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine(e.Message);
-                    Console.ResetColor();
-                }
-            }
-        }
+        //    foreach (var drive in drives)
+        //    {
+        //        token.ThrowIfCancellationRequested();
+        //        try
+        //        {
+        //            if (drive.IsReady && drive.DriveType == DriveType.Fixed)
+        //            {
+        //                //Console.WriteLine($"Reading files from drive: {drive.Name}");
+        //                string[] directories = Directory.GetDirectories(drive.Name, "*", new EnumerationOptions() { RecurseSubdirectories = true, IgnoreInaccessible = true });
+
+        //                foreach (string directory in directories)
+        //                {
+        //                    token.ThrowIfCancellationRequested();
+        //                    try
+        //                    {
+        //                        files.AddRange(files.Concat<string>(Directory.GetFiles(directory, "*.txt")));
+        //                    }
+        //                    catch (Exception e)
+        //                    {
+        //                        Console.ForegroundColor = ConsoleColor.Red;
+        //                        Console.WriteLine(e.Message);
+        //                        Console.ResetColor();
+        //                    }
+        //                }
+        //            }
+        //        }
+        //        catch (Exception e)
+        //        {
+        //            Console.ForegroundColor = ConsoleColor.Red;
+        //            Console.WriteLine(e.Message);
+        //            Console.ResetColor();
+        //        }
+        //    }
+        //}
         public async void EditForbiddenWordList()
         {
             Console.Clear();
+            if (semaphore.CurrentCount == 0)
+            {
+
+                Console.ForegroundColor= ConsoleColor.Red;
+                Console.WriteLine("\n\n\tCannot edit word list while files are being processed");
+                Console.ReadKey();
+                return;
+            }
             string prompt = "\n-------- OPTIONS --------\n";
             Menu editMenu = new Menu(prompt, new string[] { "Add", "Add from file", "Remove", "Back" });
             
@@ -231,7 +276,10 @@ namespace FileReader
                             Console.WriteLine($"\n\t{ex.Message}");
                             Console.ReadKey();
                         }
-                        finally { Console.ResetColor(); }
+                        finally 
+                        {
+                            Console.ResetColor();
+                        }
                         
                         break;
                      case 2:
@@ -264,6 +312,40 @@ namespace FileReader
                 }
             }
         }
+        public void SetSearchingDirectory()
+        {
+            Console.Clear();
+            if (semaphore.CurrentCount == 0)
+            {
+
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("\n\n\tCannot set searchin directory while files are being processed");
+                Console.ReadKey();
+                return;
+            }
+
+            Console.ForegroundColor = ConsoleColor.DarkGreen;
+            Console.WriteLine("\n-------- SET DIRECTORY --------\n");
+            try
+            {
+                Console.Write($"Current directory: {initialDirectory}\nEnter the searching directory: ");
+                string? directory = Console.ReadLine();
+                if (directory == null || directory == "") { throw new Exception("Empty directory. No changes applied"); }
+                else if (!Path.Exists(directory)) { throw new Exception("No such directory exists"); } 
+                else initialDirectory = directory;
+
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\n\t{ex.Message}");
+                Console.ReadKey();
+            }
+            finally
+            {
+                Console.ResetColor();
+            }
+        }
         public void ViewReports()
         {
             Console.Clear();
@@ -282,15 +364,16 @@ namespace FileReader
             }
             Console.ReadKey();
         }
-        public void Exit()
+        public async void Exit()
         {
-            cancellationTokenSource.Cancel();
-            cancellationTokenSource.Dispose();
-
+            await cancellationTokenSource.CancelAsync();
+            
             Console.Clear();
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("\n\n\t\tExiting . . .\n\n");
             Console.ResetColor();
+
+            cancellationTokenSource.Dispose();
             Environment.Exit(0);
         }
         public void AddWordsFromFile(string? path)
@@ -316,8 +399,7 @@ namespace FileReader
             }
             finally { Console.ResetColor(); }
             
-
         }
-
+       
     }
 }
