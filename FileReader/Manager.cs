@@ -42,7 +42,7 @@ namespace FileReader
 
             while (true)
             {
-                int selectedIndex = await menu.Run();
+                int selectedIndex = menu.Run();
 
                 switch (selectedIndex)
                 {
@@ -229,7 +229,7 @@ namespace FileReader
             
             while(true)
             {
-                int chosenOption = await editMenu.Run();
+                int chosenOption = editMenu.Run();
                 if(chosenOption == 2 && forbiddenWords.Count == 0)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;

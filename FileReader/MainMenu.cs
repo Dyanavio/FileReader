@@ -39,7 +39,7 @@ namespace FileReader
             }
             Console.ResetColor();
         }
-        public async Task<int> Run()
+        public int Run()
         {
             ConsoleKey keyPressed;
             do
