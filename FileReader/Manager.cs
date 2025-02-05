@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Formats.Asn1;
 using System.Linq;
@@ -13,7 +14,6 @@ namespace FileReader
         private string initialDirectory = @"D:\FilesForProject";
         private HashSet<string> forbiddenWords = new();
         private static SemaphoreSlim semaphore = new(1, 1);
-        private List<string> files = new List<string>();
         private List<string> reports = new List<string>();
         private static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
         CancellationToken token = cancellationTokenSource.Token;
@@ -34,7 +34,7 @@ namespace FileReader
             }
             catch { }
         }
-        public async void RunMainMenu()
+        public void RunMainMenu()
         {
             string prompt = "\r\n  ______ _ _        ______            _                     \r\n |  ____(_) |      |  ____|          | |                    \r\n | |__   _| | ___  | |__  __  ___ __ | | ___  _ __ ___ _ __ \r\n |  __| | | |/ _ \\ |  __| \\ \\/ / '_ \\| |/ _ \\| '__/ _ \\ '__|\r\n | |    | | |  __/ | |____ >  <| |_) | | (_) | | |  __/ |   \r\n |_|    |_|_|\\___| |______/_/\\_\\ .__/|_|\\___/|_|  \\___|_|   \r\n                               | |                          \r\n                               |_|                          \r\n";
             string[] options = { "Scan all files", "Edit forbidden word list", "Set searching directory", "View reports", "Exit" };
@@ -67,68 +67,73 @@ namespace FileReader
         
         public async Task ProcessFilesAsync()
         {
-            //await Task.Delay(20000);
             await semaphore.WaitAsync();
             token.ThrowIfCancellationRequested();
 
             string report = $"----- Report for {DateTime.Now} -----\n";
             int fileIndex = 1;
-            SortedList<string, int> wordCount = new SortedList<string, int>();
+            ConcurrentDictionary<string, int> wordCount = new ConcurrentDictionary<string, int>();
             foreach (string word in forbiddenWords)
             {
-                wordCount.Add(word, 0);
+                wordCount.TryAdd(word, 0);
             }
 
-            files.Clear();
-            await GetLocalFiles();
-            //GetAllFiles();
+            List<string> files = await GetLocalFiles();
 
             try
             {
                 foreach (var file in files)
                 {
                     token.ThrowIfCancellationRequested();
-
-                    StreamReader reader = new StreamReader(file);
-                    string? line;
-                    string correctedText = "";
-                    int replacements = 0;
-                    bool isIncorrect = false;
-
-                    while ((line = reader.ReadLine()) != null)
+                    try
                     {
-                        token.ThrowIfCancellationRequested();
+                        StreamReader reader = new StreamReader(file);
+                        string? line;
+                        string correctedText = "";
+                        int replacements = 0;
+                        bool isIncorrect = false;
 
-                        char[] punctuation = line.Where(Char.IsPunctuation).Distinct().ToArray();
-                        IEnumerable<string> words = line.Split().Select(x => x.Trim(punctuation));
-
-                        foreach (string word in words)
+                        while ((line = reader.ReadLine()) != null)
                         {
-                            int index = line.IndexOf(word);
-                            foreach (string forbiddenWord in forbiddenWords)
+                            token.ThrowIfCancellationRequested();
+
+                            char[] punctuation = line.Where(Char.IsPunctuation).Distinct().ToArray();
+                            IEnumerable<string> words = line.Split().Select(x => x.Trim(punctuation));
+
+                            foreach (string word in words)
                             {
-                                if (word.ToLower() == forbiddenWord.ToLower())
+                                int index = line.IndexOf(word);
+                                foreach (string forbiddenWord in forbiddenWords)
                                 {
-                                    isIncorrect = true;
-                                    wordCount[forbiddenWord]++;
-                                    line = line.Remove(index, word.Length).Insert(index, "*******");
-                                    replacements++;
+                                    if (word.ToLower() == forbiddenWord.ToLower())
+                                    {
+                                        isIncorrect = true;
+                                        wordCount[forbiddenWord]++;
+                                        line = line.Remove(index, word.Length).Insert(index, "*******");
+                                        replacements++;
+                                    }
                                 }
                             }
+                            correctedText += line + "\n";
                         }
-                        correctedText += line + "\n";
-                    }
-                    token.ThrowIfCancellationRequested();
-                    if (isIncorrect)
-                    {
-                        File.Copy(file, Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + $@"\FIles\ForbiddenFIles\{Path.GetFileNameWithoutExtension(file) + "0"}.txt", true);
-                        using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\CorrectedFiles\{Path.GetFileNameWithoutExtension(file) + "_Corrected"}.txt"))
+                        token.ThrowIfCancellationRequested();
+                        if (isIncorrect)
                         {
-                            await writer.WriteAsync(new ReadOnlyMemory<char>(correctedText.ToCharArray()), token);
+                            File.Copy(file, Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + $@"\FIles\ForbiddenFIles\{Path.GetFileNameWithoutExtension(file) + "0"}.txt", true);
+                            using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\CorrectedFiles\{Path.GetFileNameWithoutExtension(file) + "_Corrected"}.txt"))
+                            {
+                                await writer.WriteAsync(new ReadOnlyMemory<char>(correctedText.ToCharArray()), token);
+                            }
+                            report += $"{fileIndex}. {file} | Size: {new System.IO.FileInfo(file).Length} | Replacements: {replacements}\n";
+                            fileIndex++;
                         }
-                        report += $"{fileIndex}. {file} | Size: {new System.IO.FileInfo(file).Length} | Replacements: {replacements}\n";
-                        fileIndex++;
                     }
+                    catch (Exception e)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine(e.Message);
+                    }
+                    
                 }
                 int places = Math.Min(3, wordCount.Count);
                 foreach(var pair in wordCount)
@@ -136,11 +141,8 @@ namespace FileReader
                     report += $"  - {pair.Key} - {pair.Value}\n";
                     if (--places == 0) break;
                 }
-                using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\Reports\{DateTime.Now.Date.Day}-{DateTime.Now.Date.Month}-{DateTime.Now.Date.Year} I {DateTime.Now.Date.Hour}-{DateTime.Now.Date.Minute}-{DateTime.Now.Date.Second}.txt"))
-                {
-                    await writer.WriteAsync(new ReadOnlyMemory<char>(report.ToCharArray()), token);
-                }
                 reports.Add(report);
+                await LogReports();
             }
             catch (Exception e)
             {
@@ -153,8 +155,19 @@ namespace FileReader
                 semaphore.Release();
             }
         }
-        public async Task GetLocalFiles()
+        public async Task LogReports()
         {
+            using (StreamWriter writer = File.CreateText(Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.FullName + @$"\FIles\Reports\{DateTime.Now.Date.Day}-{DateTime.Now.Date.Month}-{DateTime.Now.Date.Year} I {DateTime.Now.Date.Hour}-{DateTime.Now.Date.Minute}-{DateTime.Now.Date.Second}.txt"))
+            {
+                foreach (string rep in reports)
+                {
+                    await writer.WriteAsync(new ReadOnlyMemory<char>((rep + "\n").ToCharArray()), token);
+                }
+            }
+        }
+        public async Task<List<string>> GetLocalFiles()
+        {
+            List<string> files = new List<string>();
             files.AddRange(Directory.GetFiles(initialDirectory, "*.txt"));
             await Task.Delay(2000);
 
@@ -173,47 +186,9 @@ namespace FileReader
                     Console.ResetColor();
                 }
             }
+            return files;
         }
-        //public async Task  GetAllFiles()
-        //{
-        //    DriveInfo[] drives = DriveInfo.GetDrives();
-        //    await Task.Delay(1);
-
-        //    foreach (var drive in drives)
-        //    {
-        //        token.ThrowIfCancellationRequested();
-        //        try
-        //        {
-        //            if (drive.IsReady && drive.DriveType == DriveType.Fixed)
-        //            {
-        //                //Console.WriteLine($"Reading files from drive: {drive.Name}");
-        //                string[] directories = Directory.GetDirectories(drive.Name, "*", new EnumerationOptions() { RecurseSubdirectories = true, IgnoreInaccessible = true });
-
-        //                foreach (string directory in directories)
-        //                {
-        //                    token.ThrowIfCancellationRequested();
-        //                    try
-        //                    {
-        //                        files.AddRange(files.Concat<string>(Directory.GetFiles(directory, "*.txt")));
-        //                    }
-        //                    catch (Exception e)
-        //                    {
-        //                        Console.ForegroundColor = ConsoleColor.Red;
-        //                        Console.WriteLine(e.Message);
-        //                        Console.ResetColor();
-        //                    }
-        //                }
-        //            }
-        //        }
-        //        catch (Exception e)
-        //        {
-        //            Console.ForegroundColor = ConsoleColor.Red;
-        //            Console.WriteLine(e.Message);
-        //            Console.ResetColor();
-        //        }
-        //    }
-        //}
-        public async void EditForbiddenWordList()
+        public void EditForbiddenWordList()
         {
             Console.Clear();
             if (semaphore.CurrentCount == 0)
@@ -246,7 +221,7 @@ namespace FileReader
                         Console.Write("Enter: ");
                         try
                         {
-                            string? input = Console.ReadLine();
+                            string? input = Console.ReadLine().ToLower();
                             if (input == null || input == "") throw new Exception("String must not be empty");
                             forbiddenWords.Add(input);
                         }
@@ -400,6 +375,48 @@ namespace FileReader
             finally { Console.ResetColor(); }
             
         }
-       
+
+
+
+
+        //public async Task  GetAllFiles()
+        //{
+        //    DriveInfo[] drives = DriveInfo.GetDrives();
+        //    await Task.Delay(1);
+
+        //    foreach (var drive in drives)
+        //    {
+        //        token.ThrowIfCancellationRequested();
+        //        try
+        //        {
+        //            if (drive.IsReady && drive.DriveType == DriveType.Fixed)
+        //            {
+        //                //Console.WriteLine($"Reading files from drive: {drive.Name}");
+        //                string[] directories = Directory.GetDirectories(drive.Name, "*", new EnumerationOptions() { RecurseSubdirectories = true, IgnoreInaccessible = true });
+
+        //                foreach (string directory in directories)
+        //                {
+        //                    token.ThrowIfCancellationRequested();
+        //                    try
+        //                    {
+        //                        files.AddRange(files.Concat<string>(Directory.GetFiles(directory, "*.txt")));
+        //                    }
+        //                    catch (Exception e)
+        //                    {
+        //                        Console.ForegroundColor = ConsoleColor.Red;
+        //                        Console.WriteLine(e.Message);
+        //                        Console.ResetColor();
+        //                    }
+        //                }
+        //            }
+        //        }
+        //        catch (Exception e)
+        //        {
+        //            Console.ForegroundColor = ConsoleColor.Red;
+        //            Console.WriteLine(e.Message);
+        //            Console.ResetColor();
+        //        }
+        //    }
+        //}
     }
 }

@@ -6,7 +6,7 @@ namespace FileReader
 {
     internal class Program
     {
-        static async Task Main(string[] args)
+        static void Main(string[] args)
         {
             Manager manager = new Manager();
             manager.RunMainMenu();
